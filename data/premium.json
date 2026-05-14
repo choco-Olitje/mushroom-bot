@@ -1,0 +1,16 @@
+{
+  "1501619754673373396": {
+    "premium": true,
+    "expiresAt": "2040-06-05T00:00:00.000Z",
+    "stripeCustomerId": "MainCustomer",
+    "stripeSubId": "MainServer",
+    "userId": "your_user_id"
+  },
+  "1501537055409311794": {
+    "premium": true,
+    "expiresAt": "2040-06-05T00:00:00.000Z",
+    "stripeCustomerId": "MainCustomer",
+    "stripeSubId": "MainServer",
+    "userId": "your_user_id"
+  }
+}
