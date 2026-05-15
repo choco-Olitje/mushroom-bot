@@ -1,5 +1,65 @@
 const { ChannelType, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const { getWelcomeConfig, removeWelcomeConfig, getAutoRoleConfig, removeAutoRoleConfig } = require('../utils/serverData');
+const { getAutomodConfig } = require('../utils/automod');
+
+const raidJoinTracker = new Map();
+
+async function logRaidEvent(guild, config, member, count) {
+  if (!config.logChannelId) return;
+
+  const logChannel = guild.channels.cache.get(config.logChannelId)
+    || await guild.channels.fetch(config.logChannelId).catch(() => null);
+
+  if (!logChannel || !logChannel.isTextBased()) return;
+
+  const embed = new EmbedBuilder()
+    .setColor(0xff3300)
+    .setTitle('🛡️ Automod Raid Alert')
+    .addFields(
+      { name: 'User', value: `<@${member.id}> (${member.user.tag})`, inline: false },
+      { name: 'Violation', value: 'Anti Raid', inline: true },
+      { name: 'Punishment', value: config.punishment, inline: true },
+      { name: 'Recent Joins', value: String(count), inline: true },
+      { name: 'Timestamp', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false },
+    )
+    .setTimestamp();
+
+  await logChannel.send({ embeds: [embed] }).catch(() => {});
+}
+
+async function runAntiRaid(member) {
+  if (member.user.bot) return;
+
+  const config = getAutomodConfig(member.guild.id);
+  if (!config.enabled || !config.protection.antiRaid) return;
+
+  const now = Date.now();
+  const key = member.guild.id;
+  const timestamps = raidJoinTracker.get(key) || [];
+  const recent = timestamps.filter(ts => now - ts < 30000);
+  recent.push(now);
+  raidJoinTracker.set(key, recent);
+
+  if (recent.length < 7) return;
+
+  const botMember = member.guild.members.me || await member.guild.members.fetchMe();
+
+  if (config.punishment === 'ban') {
+    if (botMember.permissions.has(PermissionFlagsBits.BanMembers) && member.bannable) {
+      await member.ban({ reason: 'Automod anti-raid', deleteMessageSeconds: 0 }).catch(() => {});
+    }
+  } else if (config.punishment === 'kick') {
+    if (botMember.permissions.has(PermissionFlagsBits.KickMembers) && member.kickable) {
+      await member.kick('Automod anti-raid').catch(() => {});
+    }
+  } else if (config.punishment === 'timeout') {
+    if (botMember.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+      await member.timeout(10 * 60 * 1000, 'Automod anti-raid').catch(() => {});
+    }
+  }
+
+  await logRaidEvent(member.guild, config, member, recent.length);
+}
 
 const WELCOME_MESSAGES = [
   'Welcome, enjoy your stay',
@@ -69,6 +129,12 @@ module.exports = {
   name: 'guildMemberAdd',
   async execute(member) {
     if (!member.guild) return;
+
+    try {
+      await runAntiRaid(member);
+    } catch (error) {
+      console.error('Anti-raid error:', error.message);
+    }
 
     await handleAutoRole(member);
 

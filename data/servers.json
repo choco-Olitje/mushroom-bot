@@ -94,6 +94,22 @@
         "locked": true,
         "blacklist": [],
         "whitelist": []
+      },
+      "1504973249862438913": {
+        "ownerId": "763492125626728489",
+        "createdAt": 1778883985890,
+        "userLimit": 0,
+        "locked": false,
+        "blacklist": [],
+        "whitelist": []
+      },
+      "1504977550261096638": {
+        "ownerId": "763492125626728489",
+        "createdAt": 1778885011195,
+        "userLimit": 0,
+        "locked": false,
+        "blacklist": [],
+        "whitelist": []
       }
     },
     "stickyMessages": {
@@ -114,8 +130,8 @@
         "messages": 120
       },
       "941024009376628796": {
-        "totalXP": 857,
-        "messages": 89
+        "totalXP": 868,
+        "messages": 90
       }
     },
     "birthdays": {
@@ -127,16 +143,16 @@
     },
     "ticketSystem": {
       "ticketName": "Support",
-      "categoryId": "1501619757429031016",
+      "categoryId": "1501619757429031018",
       "panelChannelId": "1501619757429031017",
       "transcriptChannelId": "1501619757131239635",
-      "buttonText": "📩 create support ticket",
+      "buttonText": "📩 Create Ticket",
       "supportRoleIds": [
-        "1501619754673373401",
         "1501619754673373402",
-        "1501619754673373403"
+        "1501619754673373401",
+        "1501619827150946347"
       ],
-      "nextTicketNumber": 5,
+      "nextTicketNumber": 10,
       "tickets": {
         "1501991052096045267": {
           "ticketNumber": 1,
@@ -209,10 +225,66 @@
           "supportRoleIds": [
             "1501619754673373403"
           ]
+        },
+        "1504972268437241886": {
+          "ticketNumber": 7,
+          "creatorId": "763492125626728489",
+          "issueTitle": "t",
+          "issueDescription": "t",
+          "status": "deleted",
+          "createdAt": "2026-05-15T22:22:31.485Z",
+          "categoryId": "1501619757429031016",
+          "panelChannelId": "1501619757429031017",
+          "transcriptChannelId": "1501619757131239635",
+          "supportRoleIds": [
+            "1501619754673373401",
+            "1501619754673373402",
+            "1501619754673373403"
+          ],
+          "closedAt": "2026-05-15T22:23:24.325Z",
+          "closedBy": "763492125626728489",
+          "deletedAt": "2026-05-15T22:23:28.345Z",
+          "deletedBy": "763492125626728489"
+        },
+        "1504972562835181569": {
+          "ticketNumber": 8,
+          "creatorId": "763492125626728489",
+          "issueTitle": "tt",
+          "issueDescription": "t",
+          "status": "deleted",
+          "createdAt": "2026-05-15T22:23:41.694Z",
+          "categoryId": "1501619757429031018",
+          "panelChannelId": "1501619757429031017",
+          "transcriptChannelId": "1501619757131239635",
+          "supportRoleIds": [
+            "1501619754673373402",
+            "1501619754673373401",
+            "1501619827150946347"
+          ],
+          "deletedAt": "2026-05-15T22:23:53.630Z",
+          "deletedBy": "763492125626728489"
+        },
+        "1504977595203326044": {
+          "ticketNumber": 9,
+          "creatorId": "763492125626728489",
+          "issueTitle": "t",
+          "issueDescription": "t",
+          "status": "deleted",
+          "createdAt": "2026-05-15T22:43:42.080Z",
+          "categoryId": "1501619757429031018",
+          "panelChannelId": "1501619757429031017",
+          "transcriptChannelId": "1501619757131239635",
+          "supportRoleIds": [
+            "1501619754673373402",
+            "1501619754673373401",
+            "1501619827150946347"
+          ],
+          "deletedAt": "2026-05-15T22:43:46.923Z",
+          "deletedBy": "763492125626728489"
         }
       },
       "openTicketsByUser": {},
-      "panelMessageId": "1504503646170382377"
+      "panelMessageId": "1504972462582923285"
     },
     "welcomeConfig": {
       "channelId": "1501619757131239638"
@@ -227,6 +299,24 @@
       "requiredStars": 10,
       "configuredBy": "763492125626728489",
       "configuredAt": 1778772514609
+    },
+    "automod": {
+      "enabled": true,
+      "logChannelId": "1501619757131239635",
+      "punishment": "timeout",
+      "protection": {
+        "antiSpam": true,
+        "antiLinks": false,
+        "antiInvites": true,
+        "antiMassMentions": true,
+        "antiCapsSpam": false,
+        "duplicateMessages": true,
+        "antiRaid": false,
+        "bannedWords": false
+      },
+      "bannedWords": [],
+      "updatedAt": "2026-05-15T22:42:57.115Z",
+      "updatedBy": "763492125626728489"
     }
   },
   "1501537055409311794": {

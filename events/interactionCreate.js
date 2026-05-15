@@ -1,8 +1,15 @@
 const path = require('path');
 const fs = require('fs');
-const { createErrorEmbed, createCooldownEmbed, createSuccessEmbed } = require('../utils/embeds');
+const {
+  createErrorEmbed,
+  createCooldownEmbed,
+  createSuccessEmbed,
+  createPermissionDeniedEmbed,
+  createPremiumRequiredEmbed,
+} = require('../utils/embeds');
 const { getCooldown, setCooldown } = require('../utils/cooldown');
 const { setStickyConfig, getStickyConfig } = require('../utils/serverData');
+const { isPremium } = require('../utils/premium');
 const {
   EmbedBuilder,
   ChannelType,
@@ -25,6 +32,15 @@ const {
 } = require('../utils/tickets');
 const { handleGiveawayButtonInteraction } = require('../utils/giveaways');
 const { handleCoinFlipButton } = require('../utils/economy');
+const {
+  getAutomodConfig,
+  setAutomodConfig,
+  addBannedWords,
+  removeBannedWords,
+  enableAutomod,
+  disableAutomod,
+} = require('../utils/automod');
+const { buildAutomodPanel } = require('../utils/automod-ui');
 
 function createStickyEmbed(title, content) {
   return new EmbedBuilder()
@@ -240,7 +256,7 @@ async function handleTicketModal(interaction) {
     const issueTitle = interaction.fields.getTextInputValue('ticket_issue_title');
     const issueDescription = interaction.fields.getTextInputValue('ticket_issue_description');
     const ticketNumber = allocateTicketNumber(guildId);
-    const supportRoleIds = ticketConfig.supportRoleIds.filter(Boolean);
+    const supportRoleIds = (ticketConfig.supportRoleIds || []).filter(Boolean);
 
     const createdChannel = await interaction.guild.channels.create({
       name: buildTicketChannelName(ticketNumber),
@@ -262,16 +278,27 @@ async function handleTicketModal(interaction) {
             PermissionFlagsBits.AddReactions,
           ],
         },
-        ...supportRoleIds.map(roleId => ({
-          id: roleId,
-          allow: [
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory,
-            PermissionFlagsBits.AttachFiles,
-            PermissionFlagsBits.AddReactions,
-          ],
-        })),
+        // Add permission overwrites only for valid role IDs that exist in the guild
+        ...supportRoleIds
+          .map(roleId => {
+            try {
+              const r = interaction.guild.roles.cache.get(String(roleId));
+              if (!r) return null;
+              return {
+                id: r.id,
+                allow: [
+                  PermissionFlagsBits.ViewChannel,
+                  PermissionFlagsBits.SendMessages,
+                  PermissionFlagsBits.ReadMessageHistory,
+                  PermissionFlagsBits.AttachFiles,
+                  PermissionFlagsBits.AddReactions,
+                ],
+              };
+            } catch (err) {
+              return null;
+            }
+          })
+          .filter(Boolean),
         {
           id: botMember.id,
           allow: [
@@ -335,6 +362,209 @@ async function handleTicketModal(interaction) {
   }
 }
 
+function parseAutomodWords(input) {
+  return String(input || '')
+    .split(',')
+    .map(word => word.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+async function ensureAutomodAccess(interaction) {
+  if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+    if (interaction.isButton() || interaction.isAnySelectMenu()) {
+      await interaction.reply({ embeds: [createPermissionDeniedEmbed()], ephemeral: true });
+    } else {
+      await interaction.editReply({ embeds: [createPermissionDeniedEmbed()] });
+    }
+    return false;
+  }
+
+  if (!isPremium(interaction.guildId)) {
+    if (interaction.isButton() || interaction.isAnySelectMenu()) {
+      await interaction.reply({ embeds: [createPremiumRequiredEmbed()], ephemeral: true });
+    } else {
+      await interaction.editReply({ embeds: [createPremiumRequiredEmbed()] });
+    }
+    return false;
+  }
+
+  return true;
+}
+
+async function handleAutomodButton(interaction) {
+  const parts = interaction.customId.split('_');
+  const action = parts[1];
+  const guildId = parts[2];
+
+  if (guildId !== interaction.guildId) return true;
+  if (!(await ensureAutomodAccess(interaction))) return true;
+
+  try {
+    if (action === 'toggle') {
+      const key = parts[3];
+      const current = getAutomodConfig(guildId);
+      const nextValue = !current.protection[key];
+
+      setAutomodConfig(guildId, {
+        enabled: true,
+        protection: { [key]: nextValue },
+        updatedBy: interaction.user.id,
+      });
+
+      const { embed, components } = buildAutomodPanel(guildId);
+      await interaction.update({ embeds: [embed], components });
+      await interaction.followUp({
+        embeds: [createSuccessEmbed('✅ Updated', `${key} is now ${nextValue ? 'ON' : 'OFF'}.`)],
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    if (action === 'manage') {
+      const modal = new ModalBuilder()
+        .setCustomId(`automod_words_${guildId}`)
+        .setTitle('Manage Banned Words');
+
+      const addInput = new TextInputBuilder()
+        .setCustomId('automod_add_words')
+        .setLabel('Add words (comma separated)')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(false)
+        .setMaxLength(1000);
+
+      const removeInput = new TextInputBuilder()
+        .setCustomId('automod_remove_words')
+        .setLabel('Remove words (comma separated)')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(false)
+        .setMaxLength(1000);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(addInput),
+        new ActionRowBuilder().addComponents(removeInput)
+      );
+
+      await interaction.showModal(modal);
+      return true;
+    }
+
+    if (action === 'save') {
+      enableAutomod(guildId, interaction.user.id);
+      const { embed, components } = buildAutomodPanel(guildId);
+      await interaction.update({ embeds: [embed], components });
+      await interaction.followUp({
+        embeds: [createSuccessEmbed('✅ Saved', 'Automod settings saved successfully.')],
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    if (action === 'disable') {
+      disableAutomod(guildId, interaction.user.id);
+      const { embed, components } = buildAutomodPanel(guildId);
+      await interaction.update({ embeds: [embed], components });
+      await interaction.followUp({
+        embeds: [createSuccessEmbed('✅ Disabled', 'Automod is now disabled for this server.')],
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Automod button error:', error);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ embeds: [createErrorEmbed('❌ Error', 'Automod action failed.')], ephemeral: true });
+    }
+    return true;
+  }
+}
+
+async function handleAutomodSelect(interaction) {
+  const parts = interaction.customId.split('_');
+  const action = parts[1];
+  const guildId = parts[2];
+
+  if (guildId !== interaction.guildId) return true;
+  if (!(await ensureAutomodAccess(interaction))) return true;
+
+  try {
+    if (action === 'log') {
+      const channelId = interaction.values[0];
+      setAutomodConfig(guildId, {
+        enabled: true,
+        logChannelId: channelId,
+        updatedBy: interaction.user.id,
+      });
+
+      const { embed, components } = buildAutomodPanel(guildId);
+      await interaction.update({ embeds: [embed], components });
+      await interaction.followUp({
+        embeds: [createSuccessEmbed('✅ Log Channel Updated', `Automod logs will be sent to <#${channelId}>.`)],
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    if (action === 'punish') {
+      const punishment = interaction.values[0];
+      setAutomodConfig(guildId, {
+        enabled: true,
+        punishment,
+        updatedBy: interaction.user.id,
+      });
+
+      const { embed, components } = buildAutomodPanel(guildId);
+      await interaction.update({ embeds: [embed], components });
+      await interaction.followUp({
+        embeds: [createSuccessEmbed('✅ Punishment Updated', `Punishment set to ${punishment}.`)],
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Automod select error:', error);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ embeds: [createErrorEmbed('❌ Error', 'Automod selection failed.')], ephemeral: true });
+    }
+    return true;
+  }
+}
+
+async function handleAutomodModal(interaction) {
+  const guildId = interaction.customId.split('_')[2];
+  if (guildId !== interaction.guildId) return true;
+
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    if (!(await ensureAutomodAccess(interaction))) return true;
+
+    const toAdd = parseAutomodWords(interaction.fields.getTextInputValue('automod_add_words'));
+    const toRemove = parseAutomodWords(interaction.fields.getTextInputValue('automod_remove_words'));
+
+    if (toAdd.length) addBannedWords(guildId, toAdd, interaction.user.id);
+    if (toRemove.length) removeBannedWords(guildId, toRemove, interaction.user.id);
+
+    setAutomodConfig(guildId, { enabled: true, updatedBy: interaction.user.id });
+
+    await interaction.editReply({
+      embeds: [createSuccessEmbed('✅ Banned Words Updated', 'Banned words list has been updated.')],
+      ephemeral: true,
+    });
+    return true;
+  } catch (error) {
+    console.error('Automod modal error:', error);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ embeds: [createErrorEmbed('❌ Error', 'Failed to update banned words.')], ephemeral: true });
+    } else {
+      await interaction.editReply({ embeds: [createErrorEmbed('❌ Error', 'Failed to update banned words.')], ephemeral: true });
+    }
+    return true;
+  }
+}
+
 module.exports = {
   name: 'interactionCreate',
   async execute(interaction) {
@@ -365,6 +595,11 @@ module.exports = {
         return;
       }
 
+      if (interaction.customId.startsWith('automod_words_')) {
+        await handleAutomodModal(interaction);
+        return;
+      }
+
       return;
     }
 
@@ -380,8 +615,23 @@ module.exports = {
       return;
     }
 
+    if (interaction.isButton() && interaction.customId.startsWith('automod_')) {
+      await handleAutomodButton(interaction);
+      return;
+    }
+
     if (interaction.isButton() && (interaction.customId.startsWith('heads-') || interaction.customId.startsWith('tails-'))) {
       await handleCoinFlipButton(interaction);
+      return;
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('automod_')) {
+      await handleAutomodSelect(interaction);
+      return;
+    }
+
+    if (interaction.isChannelSelectMenu() && interaction.customId.startsWith('automod_')) {
+      await handleAutomodSelect(interaction);
       return;
     }
 

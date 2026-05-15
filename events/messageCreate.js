@@ -1,10 +1,152 @@
 const { createSuccessEmbed, createLevelUpEmbed, createErrorEmbed, createEmbed } = require('../utils/embeds');
 const { addUserXP, getCountingChannel, getCountingNumber, setCountingNumber, getLastCounter, setLastCounter, getXPMultiplier, getStickyConfig, setStickyConfig, getAllStickyConfigs } = require('../utils/serverData');
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { getAutomodConfig } = require('../utils/automod');
 
 // Track rate-limited channels to prevent spam
 const stickyRateLimits = new Map();
 const STICKY_COOLDOWN_MS = 2000; // 2 second cooldown per channel
+const spamTracker = new Map();
+const duplicateTracker = new Map();
+
+function hasExcessCaps(content) {
+  const lettersOnly = (content || '').replace(/[^a-zA-Z]/g, '');
+  if (lettersOnly.length < 12) return false;
+  const uppercaseCount = (lettersOnly.match(/[A-Z]/g) || []).length;
+  return uppercaseCount / lettersOnly.length >= 0.7;
+}
+
+function hasBannedWord(content, bannedWords) {
+  const normalized = String(content || '').toLowerCase();
+  return bannedWords.some(word => {
+    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+    return regex.test(normalized);
+  });
+}
+
+async function logAutomodAction(message, config, violation) {
+  if (!config.logChannelId) return;
+
+  const logChannel = message.guild.channels.cache.get(config.logChannelId)
+    || await message.guild.channels.fetch(config.logChannelId).catch(() => null);
+
+  if (!logChannel || !logChannel.isTextBased()) return;
+
+  const embed = new EmbedBuilder()
+    .setColor(0xff3300)
+    .setTitle('🛡️ Automod Action')
+    .addFields(
+      { name: 'User', value: `<@${message.author.id}> (${message.author.tag})`, inline: false },
+      { name: 'Violation', value: violation, inline: true },
+      { name: 'Punishment', value: config.punishment, inline: true },
+      { name: 'Timestamp', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false },
+    )
+    .setFooter({ text: `User ID: ${message.author.id}` })
+    .setTimestamp();
+
+  await logChannel.send({ embeds: [embed] }).catch(() => {});
+}
+
+async function applyAutomodPunishment(message, config) {
+  const member = message.member;
+  if (!member) return;
+
+  const botMember = message.guild.members.me || await message.guild.members.fetchMe();
+
+  if (config.punishment === 'warn' || config.punishment === 'delete') {
+    return;
+  }
+
+  if (config.punishment === 'timeout') {
+    if (!botMember.permissions.has(PermissionFlagsBits.ModerateMembers)) return;
+    await member.timeout(5 * 60 * 1000, 'Automod violation').catch(() => {});
+    return;
+  }
+
+  if (config.punishment === 'kick') {
+    if (!botMember.permissions.has(PermissionFlagsBits.KickMembers)) return;
+    if (!member.kickable) return;
+    await member.kick('Automod violation').catch(() => {});
+    return;
+  }
+
+  if (config.punishment === 'ban') {
+    if (!botMember.permissions.has(PermissionFlagsBits.BanMembers)) return;
+    if (!member.bannable) return;
+    await member.ban({ reason: 'Automod violation', deleteMessageSeconds: 0 }).catch(() => {});
+  }
+}
+
+async function runAutomod(message) {
+  const config = getAutomodConfig(message.guildId);
+  if (!config.enabled) return;
+
+  const content = message.content || '';
+  if (!content.length) return;
+
+  const now = Date.now();
+  const userKey = `${message.guildId}:${message.author.id}`;
+  let violation = null;
+
+  if (config.protection.antiLinks && /(https?:\/\/|www\.)/i.test(content)) {
+    violation = 'Anti Links';
+  }
+
+  if (!violation && config.protection.antiInvites && /(discord\.gg\/|discord\.com\/invite\/|discordapp\.com\/invite\/)/i.test(content)) {
+    violation = 'Anti Discord Invites';
+  }
+
+  if (!violation && config.protection.antiMassMentions) {
+    const mentionCount = message.mentions.users.size + message.mentions.roles.size;
+    if (message.mentions.everyone || mentionCount >= 6) {
+      violation = 'Anti Mass Mentions';
+    }
+  }
+
+  if (!violation && config.protection.antiCapsSpam && hasExcessCaps(content)) {
+    violation = 'Anti Caps Spam';
+  }
+
+  if (!violation && config.protection.antiSpam) {
+    const timestamps = spamTracker.get(userKey) || [];
+    const recent = timestamps.filter(ts => now - ts < 6000);
+    recent.push(now);
+    spamTracker.set(userKey, recent);
+
+    if (recent.length >= 5) {
+      violation = 'Anti Spam';
+    }
+  }
+
+  if (!violation && config.protection.duplicateMessages) {
+    const duplicate = duplicateTracker.get(userKey) || { content: null, count: 0, lastAt: 0 };
+    if (duplicate.content === content && now - duplicate.lastAt < 45000) {
+      duplicate.count += 1;
+    } else {
+      duplicate.content = content;
+      duplicate.count = 1;
+    }
+    duplicate.lastAt = now;
+    duplicateTracker.set(userKey, duplicate);
+
+    if (duplicate.count >= 3) {
+      violation = 'Duplicate Message Spam';
+    }
+  }
+
+  if (!violation && config.protection.bannedWords && Array.isArray(config.bannedWords) && config.bannedWords.length > 0) {
+    if (hasBannedWord(content, config.bannedWords)) {
+      violation = 'Banned Words';
+    }
+  }
+
+  if (!violation) return;
+
+  await message.delete().catch(() => {});
+  await applyAutomodPunishment(message, config);
+  await logAutomodAction(message, config, violation);
+}
 
 function createStickyEmbed(title, content) {
   return new EmbedBuilder()
@@ -44,6 +186,12 @@ module.exports = {
   async execute(message) {
     // Ignore bot messages and DMs - THIS MUST BE FIRST
     if (message.author.bot || !message.guild) return;
+
+    try {
+      await runAutomod(message);
+    } catch (error) {
+      console.error('Automod runtime error:', error.message);
+    }
     
     // Handle sticky messages
     try {
