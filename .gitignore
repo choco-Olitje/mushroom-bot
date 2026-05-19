@@ -24,6 +24,7 @@ logs/
 *.log
 npm-debug.log*
 *.md
+.ticket-transcripts/
 
 # Data (optional - keep for reference, but don't commit user data)
 data/
