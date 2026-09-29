@@ -84,37 +84,19 @@ function killCurrentProcess(queue) {
 }
 
 async function createTrackResource(song, queue) {
-  // Attempt 1: play-dl native stream
-  try {
-    const playStream = await play.stream(song.url);
-    return createAudioResource(playStream.stream, {
-      inputType: playStream.type,
-      inlineVolume: true,
-    });
-  } catch (err) {
-    console.error('play-dl stream error:', err?.message || err);
-  }
-
-  // Attempt 2: yt-dlp URL extraction + ffmpeg transcoding
-  const info = await ytdlp(song.url, {
-    dumpSingleJson: true,
+  // Pipe yt-dlp directly into ffmpeg so signed media URLs stay
+  // inside yt-dlp and retain the request context YouTube requires.
+  const ytProcess = ytdlp.exec(song.url, {
+    format: '18/bestaudio/best',
+    noPlaylist: true,
     noWarnings: true,
     noCheckCertificates: true,
-    preferFreeFormats: true,
-    format: 'bestaudio/best',
+    extractorArgs: 'youtube:player_client=android',
+    output: '-',
   });
 
-  if (!info || !info.url) {
-    throw new Error('yt-dlp did not return a direct media URL.');
-  }
-
-  killCurrentProcess(queue);
-
   const ffmpegArgs = [
-    '-reconnect', '1',
-    '-reconnect_streamed', '1',
-    '-reconnect_delay_max', '5',
-    '-i', info.url,
+    '-i', 'pipe:0',
     '-analyzeduration', '0',
     '-loglevel', 'error',
     '-f', 's16le',
@@ -125,10 +107,47 @@ async function createTrackResource(song, queue) {
 
   const ffmpeg = spawn('ffmpeg', ffmpegArgs, {
     windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
 
-  queue.currentProcess = ffmpeg;
+  queue.currentProcess = {
+    kill(signal) {
+      try {
+        ytProcess.kill(signal);
+      } catch (e) {
+        // no-op
+      }
+      try {
+        ffmpeg.kill(signal);
+      } catch (e) {
+        // no-op
+      }
+    },
+  };
+
+  ytProcess.stdout.pipe(ffmpeg.stdin);
+
+  ffmpeg.stdin.on('error', (err) => {
+    if (err.code !== 'EPIPE') {
+      console.error('ffmpeg input error:', err);
+    }
+  });
+
+  ytProcess.stderr.on('data', (chunk) => {
+    const msg = chunk.toString().trim();
+    if (msg) console.error('yt-dlp:', msg);
+  });
+
+  ytProcess.on('error', (err) => {
+    console.error('yt-dlp process error:', err);
+  });
+
+  ytProcess.catch((err) => {
+    console.error('yt-dlp stream error:', err?.message || err);
+    if (!ffmpeg.killed) {
+      ffmpeg.kill('SIGKILL');
+    }
+  });
 
   ffmpeg.stderr.on('data', (chunk) => {
     const msg = chunk.toString().trim();
